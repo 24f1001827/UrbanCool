@@ -1,0 +1,20 @@
+earth_engine:
+  project: urbancool-ai-500306
+
+city:
+  name: Kolkata
+  boundary_dataset: FAO/GAUL/2015/level2
+  boundary_field: ADM2_NAME
+
+data_window:
+  start_date: 2025-03-01
+  end_date: 2025-06-01
+  cloud_cover_max: 20
+  scale_m: 30
+
+optional_sources:
+  include_ecostress: false
+
+sampling:
+  training_sample_size: 5000
+  seed: 42
