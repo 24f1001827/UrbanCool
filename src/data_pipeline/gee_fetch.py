@@ -38,12 +38,10 @@ def mask_landsat_l2_clouds(image: Any):
     return image.updateMask(cloud_shadow.And(clouds))
 
 
-def build_landsat_feature_image(ee: Any, config: ProjectConfig) -> tuple[Any, Any]:
-    city = load_city_boundary(ee, config.city_name)
-
+def build_landsat_feature_image(ee: Any, config: ProjectConfig, region: Any) -> Any:
     collection = (
         ee.ImageCollection(LANDSAT_L2)
-        .filterBounds(city)
+        .filterBounds(region)
         .filterDate(config.start_date, config.end_date)
         .filter(ee.Filter.lt("CLOUD_COVER", config.cloud_cover_max))
         .map(mask_landsat_l2_clouds)
@@ -56,7 +54,7 @@ def build_landsat_feature_image(ee: Any, config: ProjectConfig) -> tuple[Any, An
             "Try widening the date range or cloud-cover threshold."
         )
 
-    composite = collection.median().clip(city)
+    composite = collection.median().clip(region)
 
     optical = (
         composite.select(["SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"])
@@ -89,8 +87,8 @@ def build_landsat_feature_image(ee: Any, config: ProjectConfig) -> tuple[Any, An
         .rename("LST_C")
     )
 
-    feature_image = ee.Image.cat([ndvi, ndbi, albedo, lst_c]).clip(city)
-    return feature_image, city
+    feature_image = ee.Image.cat([ndvi, ndbi, albedo, lst_c]).clip(region)
+    return feature_image
 
 
 def mask_sentinel2_clouds(image: Any):
@@ -390,10 +388,15 @@ def build_ecostress_image(ee: Any, config: ProjectConfig, city: Any):
 
 
 def build_feature_stack(ee: Any, config: ProjectConfig) -> tuple[Any, Any]:
-    landsat_features, city = build_landsat_feature_image(ee, config)
-    sentinel_lulc_features = build_sentinel_lulc_image(ee, config, city)
-    morphology_features = build_morphology_image(ee, city)
-    meteorology_features = build_meteorology_image(ee, config, city)
+    city = load_city_boundary(ee, config.city_name)
+    return build_feature_stack_for_region(ee, config, city.geometry()), city
+
+
+def build_feature_stack_for_region(ee: Any, config: ProjectConfig, region: Any) -> Any:
+    landsat_features = build_landsat_feature_image(ee, config, region)
+    sentinel_lulc_features = build_sentinel_lulc_image(ee, config, region)
+    morphology_features = build_morphology_image(ee, region)
+    meteorology_features = build_meteorology_image(ee, config, region)
 
     feature_images = [
         landsat_features,
@@ -403,9 +406,9 @@ def build_feature_stack(ee: Any, config: ProjectConfig) -> tuple[Any, Any]:
     ]
 
     if config.include_ecostress:
-        feature_images.append(build_ecostress_image(ee, config, city))
+        feature_images.append(build_ecostress_image(ee, config, region))
 
-    return ee.Image.cat(feature_images), city
+    return ee.Image.cat(feature_images)
 
 
 def summarize_feature_image(
