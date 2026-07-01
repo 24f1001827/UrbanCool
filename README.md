@@ -73,6 +73,24 @@ python -m src.models.pinn
 python -m src.explainability.shap_baseline
 ```
 
+12. Export the full feature stack as a GeoTIFF via Earth Engine batch export (asynchronous — submits a task and polls until completion, then must be manually downloaded from Google Drive):
+
+```powershell
+python -m src.feature_engineering.full_raster_prediction
+```
+
+   Download `feature_stack.tif` from the `UrbanCool_Exports` folder in Google Drive and place it at `outputs/feature_stack.tif`, then run pixel-wise prediction locally:
+
+```powershell
+python -m src.feature_engineering.full_raster_prediction --skip-download
+```
+
+13. Run the ward-level aggregation (predicts across the full city grid and aggregates to ward polygons):
+
+```powershell
+python -m src.feature_engineering.ward_aggregation
+```
+
 ## Current Milestone
 
 The current pipeline:
@@ -97,6 +115,10 @@ Top SHAP drivers, in order of mean |SHAP value|: `BUILT_NRES_FRACTION`, `NDBI`, 
 
 **Experimental PINN (`src/models/pinn.py`):** feedforward NN with a surface-energy-balance physics residual term (Rn = H + LE + G) added to the loss. Currently underperforms the XGBoost baseline on raw fit (test R²=0.690 vs 0.745). Retained for possible use in the scenario engine, where physically-constrained extrapolation under interventions may matter more than raw fit — decision deferred until the scenario engine is built.
 
+**Ward-level aggregation (`src/feature_engineering/ward_aggregation.py`):** applies the trained baseline model across a full-resolution city-wide pixel grid (sampled over the union of all ward polygons, not the GAUL district boundary — see Known Limitations history), then aggregates predictions to ward level via spatial join. Produces `outputs/ward_heat_summary.geojson` with mean predicted LST, NDVI, NDBI, built fraction, and water probability per ward. Covers 141 of Kolkata's 144 wards (see Known Limitations). Output is ready for dashboard rendering (clickable ward map).
+
+**Full-resolution heat map (`src/feature_engineering/full_raster_prediction.py`):** exports the complete feature stack as a multi-band GeoTIFF via Earth Engine batch export (direct download isn't possible at this size — exceeds GEE's 50MB synchronous download cap), then runs the trained XGBoost model pixel-by-pixel locally to produce a continuous predicted-LST raster (`outputs/predicted_lst_raster.tif`) covering all of Kolkata at 30m resolution. Output range: 29.45–42.44°C, consistent with training data range. Visual inspection confirms water bodies and green pockets correctly predicted as cooler, dense built-up core as hottest — consistent with SHAP driver attribution. This is the primary "Heat Stress Map" deliverable named in the official problem statement.
+
 ## Known Limitations & Roadmap
 
 This section documents deliberate scoping decisions made to hit the 15-day hackathon
@@ -110,10 +132,11 @@ timeline. Each item below is a conscious tradeoff, not an oversight.
 | CPCB data pipeline | Ingestion script exists (`cpcb_ingest.py`) but not wired into the feature stack | One-time historical batch pull for the training window (not a live/continuous feed — not needed for this use case) | Time better spent on baseline model + physics-informed layer first |
 | OSM building/road layers | Fetched separately (`osm_fetch.py`), not yet fused into the GEE feature stack | Fuse OSM footprint geometry into morphology features for higher-precision SVF/canyon metrics | Deferred until SHAP/dashboard work shows morphology precision is a real bottleneck, not a guess |
 | Rare land-cover classes (flooded vegetation, shrub/scrub) | Very few training examples even at 100K total samples (flooded_vegetation: 21, shrub_scrub: 114) — model predictions in these specific zones should be treated with low confidence | Targeted/stratified sampling to oversample rare classes specifically | These are genuinely rare land-cover types in Kolkata; brute-force sampling more rows doesn't meaningfully fix rarity |
+| Ward boundary completeness | Datameet community ward dataset covers 141 of KMC's 144 official wards (wards 142–144 absent from source) | Official KMC ward shapefile, if obtainable, for full 144-ward coverage | Datameet source predates the most recent ward delimitation; 141/144 (~98%) coverage is sufficient for MVP demonstration |
 | Water-driver SHAP stability | `DW_WATER_PROB`'s cooling *direction* is unambiguous and strong in SHAP, but its relative importance *rank* shifts across different spatial train/val/test splits, due to water bodies being spatially clustered (rivers/ponds) rather than evenly distributed across the city grid | N/A — inherent to spatial clustering of water features | Documented as an interpretation caveat, not a bug to fix |
 | Physics-informed NN (PINN) | Implemented with an energy-balance residual loss term; currently underperforms XGBoost baseline on raw fit (test R²=0.690 vs 0.745) | Tune `lambda_physics`, physics-head formulation, or use PINN selectively for scenario-engine extrapolation rather than the main hotspot model | Decision on whether PINN is needed deferred until scenario engine requirements are clearer |
 | Data temporality | All raster features are a single March–June 2025 median/mean composite ("representative dry-season snapshot"), not a time series — no day-to-day or seasonal change is captured | Multiple seasonal composites for comparison (dry season vs monsoon) | Not required for spatial hotspot identification and intervention placement, which is the core ask of the problem statement |
-
+| Raster export method | City-wide feature stack exported via asynchronous Earth Engine batch task to Google Drive, then manually downloaded | Automated download via Google Drive API, or server-side prediction inside Earth Engine (not possible — XGBoost models aren't natively executable in GEE) | Direct synchronous download (`getDownloadURL`) is capped at 50MB; the full 35-band feature stack exceeds this at city scale |
 ## Repository Structure
 
 ```text
@@ -142,8 +165,6 @@ UrbanCool/
 
 ## Next Milestones
 
-- build ward-level zonal summaries (KMC ward boundaries via OSM, or GAUL admin level 3)
-- apply the trained model across the full raster surface (all pixels, not just the sample) for a continuous heat map
 - build the Streamlit/folium dashboard with clickable ward regions
 - build scenario simulation module (intervention effects on LST)
 - build constrained optimization module (budget-allocated intervention placement)
