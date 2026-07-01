@@ -780,6 +780,19 @@ GLOBAL_STYLES = """
             width: auto;
         }
     }
+    /* Fix Streamlit filter labels */
+
+[data-testid="stWidgetLabel"] {
+    color: #111827 !important;
+}
+
+[data-testid="stWidgetLabel"] p {
+    color: #111827 !important;
+}
+
+[data-testid="stWidgetLabel"] span {
+    color: #111827 !important;
+}
 </style>
 """
 
