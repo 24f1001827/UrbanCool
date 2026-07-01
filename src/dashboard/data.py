@@ -22,6 +22,15 @@ WARD_SUMMARY_COLUMNS = [
     "dominant_driver",
     "top_driver_value",
 ]
+WARD_PLANNING_COLUMNS = [
+    "PREDICTED_LST_C",
+    "NDVI",
+    "NDBI",
+    "BUILT_FRACTION",
+    "DW_WATER_PROB",
+    "pixel_count",
+    "area_km2",
+]
 FEATURE_LABELS = {
     "LST_C": "Land surface temperature",
     "NDVI": "Vegetation cover",
@@ -43,6 +52,7 @@ WARD_BOUNDARY_CANDIDATES = (
     Path("data/external/wards.geojson"),
 )
 WARD_SUMMARY_CANDIDATES = (
+    Path("outputs/ward_heat_summary.geojson"),
     Path("outputs/ward_summary.geojson"),
     Path("outputs/ward_summary.csv"),
     Path("data/processed/ward_summary.csv"),
@@ -154,26 +164,73 @@ def load_ward_boundaries(artifacts: DashboardArtifacts = DashboardArtifacts()) -
 
 @st.cache_data(show_spinner=False)
 def load_ward_summaries(artifacts: DashboardArtifacts = DashboardArtifacts()) -> pd.DataFrame:
-    path = _resolve_existing_path(
-        artifacts.ward_summary_path,
-        tuple(candidate for candidate in WARD_SUMMARY_CANDIDATES if candidate != artifacts.ward_summary_path),
-    )
+    default_artifacts = DashboardArtifacts()
+    if artifacts.ward_summary_path == default_artifacts.ward_summary_path:
+        path = _resolve_existing_path(
+            artifacts.ward_summary_path,
+            tuple(candidate for candidate in WARD_SUMMARY_CANDIDATES if candidate != artifacts.ward_summary_path),
+        )
+    else:
+        path = artifacts.ward_summary_path
     if not path.exists():
         return _empty_ward_summary_frame()
 
     if path.suffix.lower() in {".geojson", ".json"}:
-        summary = gpd.read_file(path)
+        summary_gdf = gpd.read_file(path)
+        if summary_gdf.empty:
+            return _empty_ward_summary_frame()
+        summary = _normalize_precomputed_ward_summary(summary_gdf)
+        if "geometry" in summary_gdf:
+            projected = summary_gdf.to_crs("EPSG:32645") if summary_gdf.crs is not None else summary_gdf.set_crs("EPSG:4326").to_crs("EPSG:32645")
+            summary["area_km2"] = projected.geometry.area / 1_000_000.0
         if summary.empty:
             return _empty_ward_summary_frame()
         summary = pd.DataFrame(summary.drop(columns="geometry", errors="ignore"))
     else:
         summary = pd.read_csv(path)
+        summary = _normalize_precomputed_ward_summary(summary)
 
-    for column in WARD_SUMMARY_COLUMNS:
+    for column in [*WARD_SUMMARY_COLUMNS, *WARD_PLANNING_COLUMNS]:
         if column not in summary.columns:
             summary[column] = np.nan
 
-    return summary[WARD_SUMMARY_COLUMNS].copy()
+    return summary[[*WARD_SUMMARY_COLUMNS, *WARD_PLANNING_COLUMNS]].copy()
+
+
+def _normalize_precomputed_ward_summary(summary: pd.DataFrame) -> pd.DataFrame:
+    normalized = summary.copy()
+    columns_lower = {column.lower(): column for column in normalized.columns}
+
+    ward_id_source = next((columns_lower[key] for key in WARD_ID_CANDIDATES if key in columns_lower), None)
+    ward_name_source = next((columns_lower[key] for key in WARD_NAME_CANDIDATES if key in columns_lower), None)
+    if ward_id_source is not None and "ward_id" not in normalized:
+        normalized["ward_id"] = normalized[ward_id_source].astype(str)
+    if ward_name_source is not None and "ward_name" not in normalized:
+        normalized["ward_name"] = "Ward " + normalized[ward_name_source].astype(str)
+    if "ward_id" not in normalized:
+        normalized["ward_id"] = normalized.index.astype(str)
+    if "ward_name" not in normalized:
+        normalized["ward_name"] = "Ward " + normalized["ward_id"].astype(str)
+
+    if "PREDICTED_LST_C" in normalized and "mean_lst" not in normalized:
+        normalized["mean_lst"] = normalized["PREDICTED_LST_C"]
+    if "mean_lst" in normalized and "PREDICTED_LST_C" not in normalized:
+        normalized["PREDICTED_LST_C"] = normalized["mean_lst"]
+    if "pixel_count" in normalized and "sample_count" not in normalized:
+        normalized["sample_count"] = normalized["pixel_count"]
+
+    if "hotspot_share" not in normalized:
+        lst = pd.to_numeric(normalized.get("mean_lst"), errors="coerce")
+        threshold = lst.quantile(0.67) if lst.notna().any() else np.nan
+        normalized["hotspot_share"] = np.where(lst.notna(), (lst >= threshold).astype(float), np.nan)
+    if "hotspot_score" not in normalized:
+        lst = pd.to_numeric(normalized.get("mean_lst"), errors="coerce")
+        share = pd.to_numeric(normalized.get("hotspot_share"), errors="coerce").fillna(0.0)
+        normalized["hotspot_score"] = lst * 0.6 + share * 100.0 * 0.4
+    if "rank" not in normalized:
+        normalized["rank"] = pd.to_numeric(normalized["hotspot_score"], errors="coerce").rank(ascending=False, method="dense")
+
+    return normalized
 
 
 def derive_hotspot_metrics(points_df: pd.DataFrame) -> pd.DataFrame:
