@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ from src.dashboard.data import (
     derive_hotspot_metrics,
     derive_ward_summary,
     get_demo_status,
+    load_ward_boundaries,
     summarize_global_shap,
 )
 
@@ -49,6 +51,39 @@ class DashboardDataTests(unittest.TestCase):
             self.assertFalse(status["shap_ready"])
             self.assertFalse(status["ward_boundaries_ready"])
             self.assertFalse(status["ward_summary_ready"])
+
+    def test_generated_ward_summary_counts_as_ward_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            outputs_dir = root / "outputs"
+            outputs_dir.mkdir(parents=True, exist_ok=True)
+            gdf = gpd.GeoDataFrame(
+                {
+                    "WARD": ["93"],
+                    "PREDICTED_LST_C": [36.8],
+                    "NDVI": [0.32],
+                    "NDBI": [-0.03],
+                    "BUILT_FRACTION": [0.46],
+                    "DW_WATER_PROB": [0.07],
+                    "pixel_count": [2242],
+                    "geometry": [Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+                },
+                crs="EPSG:4326",
+            )
+            gdf.to_file(outputs_dir / "ward_heat_summary.geojson", driver="GeoJSON")
+
+            cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                wards = load_ward_boundaries()
+                status = get_demo_status()
+            finally:
+                os.chdir(cwd)
+
+            self.assertFalse(wards.empty)
+            self.assertEqual(wards.iloc[0]["ward_name"], "Ward 93")
+            self.assertTrue(status["ward_boundaries_ready"])
+            self.assertTrue(status["ward_summary_ready"])
 
     def test_derive_ward_summary_adds_rank_and_driver(self) -> None:
         points = pd.DataFrame(

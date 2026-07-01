@@ -47,6 +47,7 @@ FEATURE_LABELS = {
 WARD_ID_CANDIDATES = ("ward_id", "ward_no", "ward", "wardnum", "id", "objectid", "fid")
 WARD_NAME_CANDIDATES = ("ward_name", "name", "ward_label", "wardnam", "ward_no", "ward")
 WARD_BOUNDARY_CANDIDATES = (
+    Path("outputs/ward_heat_summary.geojson"),
     Path("data/external/ward_boundaries.geojson"),
     Path("data/external/kmc_wards.geojson"),
     Path("data/external/wards.geojson"),
@@ -127,6 +128,7 @@ def _normalize_ward_columns(wards: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
     normalized = wards.copy()
     columns_lower = {column.lower(): column for column in normalized.columns}
+    explicit_name_sources = {"ward_name", "name", "ward_label", "wardnam"}
 
     ward_id_source = next((columns_lower[key] for key in WARD_ID_CANDIDATES if key in columns_lower), None)
     ward_name_source = next((columns_lower[key] for key in WARD_NAME_CANDIDATES if key in columns_lower), None)
@@ -136,7 +138,7 @@ def _normalize_ward_columns(wards: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     else:
         normalized["ward_id"] = normalized[ward_id_source].astype(str)
 
-    if ward_name_source is None:
+    if ward_name_source is None or ward_name_source.lower() not in explicit_name_sources:
         normalized["ward_name"] = "Ward " + normalized["ward_id"].astype(str)
     else:
         normalized["ward_name"] = normalized[ward_name_source].astype(str)

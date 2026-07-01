@@ -4,7 +4,7 @@ from src.dashboard import DashboardArtifacts, render_app
 
 
 def main() -> None:
-    st.set_page_config(page_title="UrbanCool AI", layout="wide")
+    st.set_page_config(page_title="UrbanCool AI", layout="wide", initial_sidebar_state="expanded")
     render_app(DashboardArtifacts())
 
 

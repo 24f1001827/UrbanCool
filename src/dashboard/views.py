@@ -11,7 +11,6 @@ from streamlit_folium import st_folium
 
 from src.dashboard.components import (
     inject_global_styles,
-    open_panel,
     render_dataframe_preview,
     render_empty_state,
     render_hero_banner,
@@ -22,7 +21,6 @@ from src.dashboard.components import (
     render_section_header,
     render_sidebar_brand,
     render_status_pill,
-    render_story_panel,
 )
 from src.dashboard.data import (
     DashboardArtifacts,
@@ -62,13 +60,6 @@ HOTSPOT_COLORS = {
     "Moderate": "#f97316",
     "Severe": "#dc2626",
 }
-
-STORY_STEPS = [
-    ("Identify hotspot", "Start with the map to locate where urban heat stress concentrates across the sampled surface."),
-    ("Understand drivers", "Use SHAP-backed insights to see whether built-up density, vegetation loss, or radiation is dominating."),
-    ("Compare wards", "Shift to ward rankings to prioritize which areas need intervention first."),
-    ("Evaluate interventions", "Use the scenario view as the handoff point for future cooling strategy simulation."),
-]
 
 
 def render_app(artifacts: DashboardArtifacts = DashboardArtifacts()) -> None:
@@ -132,7 +123,7 @@ def render_overview_page(artifacts: DashboardArtifacts) -> None:
     render_hero_banner(
         "UrbanCool AI<br>Urban Heat Intelligence Platform",
         "Identify hotspots • Explain drivers • Prioritize interventions",
-        "Hackathon Demo Mode",
+        "",
         [
             "Artifact-first intelligence",
             "Geospatial hotspot discovery",
@@ -140,67 +131,16 @@ def render_overview_page(artifacts: DashboardArtifacts) -> None:
         ],
     )
 
-    hero_cols = st.columns((1.55, 0.95))
-    with hero_cols[0]:
-        render_presentation_band(
-            [
-                ("What it does", "Transforms sampled geospatial heat signals into an actionable intelligence surface."),
-                ("Where it starts", "A map-first workflow makes hotspot geography visible in the first glance."),
-                ("Why it matters", "Driver explanations connect elevated heat to built form, vegetation, and urban morphology."),
-                ("What comes next", "Ward ranking and intervention planning frame the path to cooling strategy decisions."),
-            ]
-        )
-    with hero_cols[1]:
-        render_story_panel(STORY_STEPS)
-
-    _render_readiness_strip(status)
-
     if points.empty:
         render_empty_state(
             "Platform ready, artifacts missing",
-            "The premium dashboard shell is live, but it needs the sampled training artifact before the intelligence surface can render.",
+            "The dashboard shell is live, but it needs the sampled training artifact before the intelligence surface can render.",
             [
                 "Run `python -m src.data_pipeline.gee_fetch --export-csv data/processed/kolkata_training_sample.csv --sample-size 100000` from the project environment.",
                 "Refresh the app to unlock the map, KPI cards, and hotspot workflow.",
             ],
         )
         return
-
-    overview_cols = st.columns((1.42, 0.88))
-    with overview_cols[0]:
-        render_section_header(
-            "Heat Overview",
-            "The map appears first so judges can immediately see where urban heat stress is clustering.",
-        )
-        st_folium(_build_hotspot_map(points.sort_values("hotspot_score", ascending=False).head(1200), radius=4.5), use_container_width=True, height=470)
-        render_legend(
-            [
-                ("Background", HOTSPOT_COLORS["Background"]),
-                ("Watch", HOTSPOT_COLORS["Watch"]),
-                ("Moderate", HOTSPOT_COLORS["Moderate"]),
-                ("Severe", HOTSPOT_COLORS["Severe"]),
-            ]
-        )
-    with overview_cols[1]:
-        render_section_header(
-            "Executive Signal",
-            "The first ten seconds should answer what the platform does, where the heat is, and what should be investigated next.",
-        )
-        render_insight_card(
-            "Hotspot overview",
-            _build_hotspot_overview_copy(points),
-            tone="orange",
-        )
-        render_insight_card(
-            "Driver overview",
-            f"{dominant_driver} is currently the strongest explanation signal available from the loaded artifacts.",
-            tone="blue",
-        )
-        render_insight_card(
-            "Action framing",
-            "Use the Hotspots Map to inspect candidate zones, then move to Ward Rankings to identify which areas deserve the first intervention budget.",
-            tone="green",
-        )
 
     kpi_cols = st.columns(5)
     with kpi_cols[0]:
@@ -214,31 +154,65 @@ def render_overview_page(artifacts: DashboardArtifacts) -> None:
     with kpi_cols[4]:
         render_kpi_card("Model Coverage", coverage, "Coverage across points, SHAP outputs, and ward geometry.", accent="linear-gradient(90deg, #0f9f6e, #f97316)")
 
-    insight_cols = st.columns((1.05, 0.95))
-    with insight_cols[0]:
-        hotspot_preview = points.sort_values("hotspot_score", ascending=False)[
-            ["latitude", "longitude", "LST_C", "hotspot_label", "hotspot_score"]
-        ]
+    render_section_header(
+        "Priority Filters",
+        "Use these controls to narrow the sample before you inspect the map and table.",
+    )
+    control_cols = st.columns((0.95, 1.2, 0.8))
+    overview_severity = control_cols[0].selectbox("Severity", ["All", "Severe", "Moderate", "Watch", "Background"], key="overview_severity")
+    overview_lst_range = control_cols[1].slider(
+        "LST range (°C)",
+        min_value=float(points["LST_C"].min()),
+        max_value=float(points["LST_C"].max()),
+        value=(float(points["LST_C"].min()), float(points["LST_C"].max())),
+        key="overview_lst_range",
+    )
+    overview_displayed_points = control_cols[2].slider(
+        "Displayed points",
+        min_value=100,
+        max_value=min(5000, len(points)),
+        value=min(1800, len(points)),
+        step=100,
+        key="overview_displayed_points",
+    )
+
+    overview_filtered = points[(points["LST_C"] >= overview_lst_range[0]) & (points["LST_C"] <= overview_lst_range[1])]
+    if overview_severity != "All":
+        overview_filtered = overview_filtered[overview_filtered["hotspot_label"] == overview_severity]
+    overview_filtered = overview_filtered.sort_values("hotspot_score", ascending=False).head(int(overview_displayed_points))
+
+    content_cols = st.columns((1.12, 0.88))
+    with content_cols[0]:
         render_dataframe_preview(
-            hotspot_preview,
+            overview_filtered[["latitude", "longitude", "LST_C", "hotspot_label", "hotspot_score"]],
             "Priority Hotspot Sample",
-            limit=8,
+            limit=12,
             caption="These are the highest-intensity sample points in the current artifact set.",
         )
-    with insight_cols[1]:
+    with content_cols[1]:
         render_section_header(
-            "Readiness and Next Actions",
-            "The dashboard stays honest about what is loaded, what is inferred, and which module judges should inspect next.",
+            "Heat Surface",
+            "The map stays on the right so the visual signal is immediate.",
         )
-        render_insight_card(
-            "Judge walkthrough",
-            "Open with the map, call out the hotspot clusters, highlight the leading driver signal, then transition into ward prioritization for intervention planning.",
-            tone="blue",
+        st_folium(_build_hotspot_map(overview_filtered if not overview_filtered.empty else points.sort_values("hotspot_score", ascending=False).head(1200), radius=4.5), use_container_width=True, height=390)
+        render_legend(
+            [
+                ("Background", HOTSPOT_COLORS["Background"]),
+                ("Watch", HOTSPOT_COLORS["Watch"]),
+                ("Moderate", HOTSPOT_COLORS["Moderate"]),
+                ("Severe", HOTSPOT_COLORS["Severe"]),
+            ]
         )
-        render_insight_card(
-            "Artifact health",
-            _build_artifact_health_copy(status),
-            tone="green" if status["training_points_ready"] and status["shap_ready"] else "orange",
+        st.markdown(
+            "<div style='width:100%; text-align:center; margin:0.35rem 0 0.35rem;'><div class='uc-panel-title' style='margin-bottom:0;'>What this view shows</div></div>",
+            unsafe_allow_html=True,
+        )
+        render_presentation_band(
+            [
+                ("Map-first analysis", "Explore spatial variation in land-surface heat intensity across the city."),
+                ("Actionable intelligence", "Combine hotspot detection, driver insights, and scenario planning for decisions."),
+                ("Data transparency", "All metrics are derived from validated artifacts and clearly communicated."),
+            ]
         )
 
 
@@ -247,7 +221,7 @@ def render_hotspots_page(artifacts: DashboardArtifacts) -> None:
     render_hero_banner(
         "Heat Hotspots Map",
         "Map-first spatial exploration for sampled land-surface heat intensity.",
-        "Interactive Analysis",
+        "",
         ["Heat palette", "Filterable hotspot classes", "Presentation-ready geospatial canvas"],
     )
 
@@ -262,11 +236,15 @@ def render_hotspots_page(artifacts: DashboardArtifacts) -> None:
         )
         return
 
+    render_section_header(
+        "Spatial Filters",
+        "Keep the control strip close to the map so the page stays compact.",
+    )
     control_cols = st.columns((0.85, 1.25, 0.9))
     severity_options = ["All", "Severe", "Moderate", "Watch", "Background"]
     severity = control_cols[0].selectbox("Severity", severity_options)
     lst_range = control_cols[1].slider(
-        "LST range (C)",
+        "LST range (°C)",
         min_value=float(points["LST_C"].min()),
         max_value=float(points["LST_C"].max()),
         value=(float(points["LST_C"].min()), float(points["LST_C"].max())),
@@ -284,7 +262,7 @@ def render_hotspots_page(artifacts: DashboardArtifacts) -> None:
         filtered = filtered[filtered["hotspot_label"] == severity]
     filtered = filtered.sort_values("hotspot_score", ascending=False).head(max_points)
 
-    top_cols = st.columns((1.25, 0.75))
+    top_cols = st.columns((1.2, 0.8))
     with top_cols[0]:
         render_section_header(
             "Spatial Heat Surface",
@@ -293,7 +271,7 @@ def render_hotspots_page(artifacts: DashboardArtifacts) -> None:
         if filtered.empty:
             st.warning("No points matched the current filter combination.")
         else:
-            st_folium(_build_hotspot_map(filtered, radius=5.0), use_container_width=True, height=600)
+            st_folium(_build_hotspot_map(filtered, radius=5.0), use_container_width=True, height=560)
             render_legend(
                 [
                     ("Background", HOTSPOT_COLORS["Background"]),
@@ -329,6 +307,7 @@ def render_hotspots_page(artifacts: DashboardArtifacts) -> None:
                 "Filtered Hotspot Sample",
                 limit=12,
                 caption="Use this table when a judge asks for concrete point-level evidence.",
+                height=510,
             )
 
 
@@ -361,7 +340,7 @@ def render_ward_rankings_page(artifacts: DashboardArtifacts) -> None:
     render_hero_banner(
         "Ward Rankings",
         "Executive prioritization for ward-level heat intervention planning.",
-        "Decision Intelligence",
+        "",
         ["Ward choropleth", "Ranking table", "High-risk selection brief"],
     )
 
@@ -489,7 +468,7 @@ def render_driver_explanations_page(artifacts: DashboardArtifacts) -> None:
     render_hero_banner(
         "Driver Explanations",
         "Narrative-first intelligence for why heat stress is elevated.",
-        "Explainable AI Layer",
+        "",
         ["Global SHAP signals", "Ward-level insight cards", "Judge-friendly explanation flow"],
     )
 
@@ -578,7 +557,7 @@ def render_scenarios_page(artifacts: DashboardArtifacts) -> None:
     render_hero_banner(
         "Scenario Simulation",
         "Transparent intervention impact estimates using model outputs, SHAP signals, and bounded domain assumptions.",
-        "Intervention Simulator",
+        "",
         ["Ward controls", "Cooling estimate", "Confidence notes", "PINN-ready response model"],
     )
 
@@ -651,7 +630,7 @@ def render_optimization_page(artifacts: DashboardArtifacts) -> None:
     render_hero_banner(
         "Budget Optimization",
         "Greedy baseline allocation that maximizes estimated cooling under a planner-defined budget.",
-        "Constrained Planning",
+        "",
         ["Budget controls", "Ward allocation", "Cost breakdown", "Explainable ranking"],
     )
 
@@ -732,7 +711,7 @@ def render_ai_recommendations_page(artifacts: DashboardArtifacts) -> None:
     render_hero_banner(
         "AI Recommendations",
         "Deterministic planner-friendly summaries grounded in ward metrics, SHAP drivers, and optimization outputs.",
-        "Decision Support",
+        "",
         ["Ward summaries", "Recommendations", "City briefing", "Offline templates"],
     )
 
@@ -779,29 +758,6 @@ def render_ai_recommendations_page(artifacts: DashboardArtifacts) -> None:
         caption="Reusable narrative snippets for the highest-priority wards.",
     )
 
-
-def _render_readiness_strip(status: dict) -> None:
-    cols = st.columns(3)
-    with cols[0]:
-        render_status_pill(
-            "Heat hotspot visualization",
-            status["training_points_ready"],
-            "Ready from the sampled training artifact." if status["training_points_ready"] else "Waiting for sampled point artifact.",
-        )
-    with cols[1]:
-        render_status_pill(
-            "Ward rankings",
-            status["ward_boundaries_ready"],
-            "Auto-enables once local ward geometry is available." if not status["ward_boundaries_ready"] else "Ward boundaries are loaded for prioritization.",
-        )
-    with cols[2]:
-        render_status_pill(
-            "Driver explanations",
-            status["shap_ready"],
-            "Global and ward insight cards activate when SHAP outputs are available." if not status["shap_ready"] else "Explanation layer is ready for narrative insights.",
-        )
-
-
 def _resolve_overview_driver(artifacts: DashboardArtifacts, points: pd.DataFrame, wards: gpd.GeoDataFrame) -> str:
     shap_df = load_shap_values(artifacts)
     if shap_df.empty:
@@ -838,21 +794,6 @@ def _build_hotspot_overview_copy(points: pd.DataFrame) -> str:
         f"The current sample contains {severe:,} severe hotspots and {moderate:,} moderate hotspots, "
         "giving judges a fast view of where elevated heat stress is clustering."
     )
-
-
-def _build_artifact_health_copy(status: dict) -> str:
-    ready = []
-    if status["training_points_ready"]:
-        ready.append("sampled heat points")
-    if status["shap_ready"]:
-        ready.append("SHAP explanations")
-    if status["ward_boundaries_ready"]:
-        ready.append("ward geometry")
-    if not ready:
-        return "No supporting artifacts are loaded yet."
-    return "Loaded artifacts: " + ", ".join(ready) + "."
-
-
 def _build_hotspot_page_copy(filtered: pd.DataFrame, severity: str) -> str:
     scope = "the full point set" if severity == "All" else f"the {severity.lower()} class"
     peak = filtered.sort_values("hotspot_score", ascending=False).iloc[0]
