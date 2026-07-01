@@ -1,171 +1,424 @@
 # UrbanCool AI
 
-UrbanCool AI is a hackathon prototype for urban heat stress mapping and cooling intervention planning.
+UrbanCool AI is a hackathon prototype for urban heat-stress mapping, explainable hotspot diagnosis, and cooling intervention planning. It combines satellite-derived geospatial features, machine learning, SHAP explanations, ward-level aggregation, scenario simulation, budget optimization, and a Streamlit dashboard into one decision-support workflow for urban climate planning.
 
-This repository has a working data pipeline, a validated baseline LST model, SHAP-based driver attribution, and an experimental physics-informed neural network (PINN). Next milestone is ward-level zonal aggregation for the dashboard.
+The current prototype focuses on Kolkata and produces ward-level intelligence for identifying where heat stress is concentrated, why it is elevated, and which cooling interventions should be prioritized under budget constraints.
 
-## Setup
+## 1. Project Overview
 
-1. Activate the virtual environment:
+UrbanCool AI helps planners move from heat maps to action plans. The system:
 
-```powershell
-.\.venv\Scripts\Activate.ps1
+- builds a multi-source geospatial feature stack for urban heat analysis
+- trains a baseline land surface temperature model
+- explains model behavior using SHAP driver attribution
+- aggregates predicted heat stress to municipal wards
+- simulates realistic cooling interventions with transparent assumptions
+- optimizes intervention allocation under budget constraints
+- generates deterministic, planner-friendly recommendation summaries
+- presents the full workflow through an interactive dashboard
+
+The project is designed for hackathon review: it is artifact-first, reproducible from local outputs, and honest about assumptions and limitations.
+
+## 2. Problem Statement
+
+Urban heat is not evenly distributed. Dense built-up areas, low vegetation cover, limited water bodies, and urban morphology can create localized heat stress that is difficult to see from city-wide averages.
+
+Decision makers need more than a heat map. They need to know:
+
+- which wards are hottest
+- what urban features are driving the heat signal
+- where interventions are likely to help
+- how to allocate limited budgets
+- how to communicate recommendations clearly to non-technical stakeholders
+
+UrbanCool AI addresses this by connecting geospatial modeling, explainability, scenario planning, and budget-aware prioritization in one workflow.
+
+## 3. Solution Architecture
+
+```text
+Satellite, reanalysis, and urban morphology data
+        |
+        v
+Google Earth Engine feature stack
+        |
+        v
+Training sample + full-city raster features
+        |
+        v
+Baseline XGBoost LST model
+        |
+        +--> SHAP explainability
+        |
+        +--> Full-resolution predicted LST raster
+        |
+        +--> Ward-level heat summary
+                    |
+                    v
+        Scenario simulation engine
+                    |
+                    v
+        Budget-constrained optimization engine
+                    |
+                    v
+        Deterministic AI decision-support layer
+                    |
+                    v
+        Streamlit dashboard
 ```
 
-2. Make sure Earth Engine authentication has been completed once:
+The architecture separates prediction, explanation, simulation, optimization, and communication. This keeps the prototype modular and allows future replacement of the intervention response model with a physics-informed neural network or another calibrated simulator.
 
-```powershell
-earthengine authenticate --auth_mode=localhost
-earthengine set_project urbancool-ai-500306
-```
+## 4. System Components
 
-3. Run the connection check:
+| Component | Purpose | Key Files |
+|---|---|---|
+| Data pipeline | Fetches and prepares remote-sensing, land-cover, urban morphology, and optional station data | `src/data_pipeline/` |
+| Feature engineering | Builds full raster prediction artifacts and ward-level aggregation | `src/feature_engineering/` |
+| Baseline model | Trains an XGBoost land surface temperature regressor | `src/models/baseline_xgboost.py` |
+| Experimental PINN | Tests a physics-informed neural network with surface-energy-balance residuals | `src/models/pinn.py` |
+| Explainability | Generates SHAP feature attributions and visual artifacts | `src/explainability/shap_baseline.py` |
+| Scenario engine | Estimates bounded, transparent intervention cooling impacts | `src/scenario_engine/` |
+| Optimization engine | Allocates interventions under budget constraints using a greedy baseline | `src/optimization/` |
+| Decision-support layer | Produces deterministic planner summaries and recommendations | `src/llm_layer/` |
+| Dashboard | Provides the interactive review and planning interface | `src/dashboard/`, `app.py` |
 
-```powershell
-python -m tests.test_gee_connection
-```
+## 5. Data Sources
 
-4. Run the first data-pipeline summary:
+UrbanCool AI uses a multi-source feature stack:
 
-```powershell
-python -m src.data_pipeline.gee_fetch
-```
+- **Landsat 8 Level-2:** land surface temperature, NDVI, NDBI, and albedo proxy
+- **Sentinel-2 surface reflectance:** additional spectral indices such as NDVI, NDBI, BSI, and MNDWI
+- **Dynamic World:** land-cover probabilities and classes, including water, built, grass, trees, crops, and bare ground
+- **GHSL:** building height, built-up fraction, non-residential built fraction, and morphology proxies
+- **ERA5-Land:** meteorological and radiation context, including air temperature, dewpoint, wind speed, precipitation, pressure, soil moisture, and heat-flux variables
+- **OpenStreetMap:** building and road layers fetched for future morphology enhancement
+- **CPCB station CSVs:** optional ingestion script exists for externally downloaded observations
+- **Ward boundaries:** local ward GeoJSON used for ward-level aggregation and dashboard mapping
 
-5. Export a sampled training table (batched internally to work around GEE's 5,000-element getInfo limit):
+The active prototype relies primarily on remote-sensing and reanalysis features. CPCB and OSM fusion are included as future enhancement paths.
 
-```powershell
-python -m src.data_pipeline.gee_fetch --export-csv data/processed/kolkata_training_sample.csv --sample-size 100000
-```
+## 6. Modeling Approach
 
-6. Optionally include ECOSTRESS LST where coverage exists:
+The primary predictive model is an XGBoost regressor trained to estimate land surface temperature (`LST_C`) from geospatial, land-cover, morphology, and radiation features.
 
-```powershell
-python -m src.data_pipeline.gee_fetch --include-ecostress --export-csv data/processed/kolkata_training_sample_ecostress.csv --sample-size 100000
-```
+Current baseline results on a 100,000-row training sample:
 
-7. Fetch OSM building and road layers:
+| Split | R2 | RMSE |
+|---|---:|---:|
+| Train | 0.891 | approximately 0.8-1.0 C |
+| Validation | 0.775 | approximately 0.8-1.0 C |
+| Test | 0.745 | approximately 0.8-1.0 C |
 
-```powershell
-python -m src.data_pipeline.osm_fetch
-```
+The model uses a spatial train/validation/test split based on a latitude-longitude grid. Splitting by spatial cells reduces leakage from neighboring pixels and gives a more realistic estimate of generalization.
 
-8. Clean a downloaded CPCB station CSV (optional — not currently used in the feature stack; see Known Limitations):
+The project also includes an experimental physics-informed neural network in `src/models/pinn.py`. The PINN uses a surface-energy-balance residual term, but currently underperforms the XGBoost baseline on raw predictive fit. It is retained as a future candidate for scenario extrapolation, where physical consistency may matter more than pure predictive accuracy.
 
-```powershell
-python -m src.data_pipeline.cpcb_ingest --input-csv data/external/cpcb_raw.csv
-```
+## 7. Explainability Layer
 
-9. Train the baseline XGBoost LST model:
+UrbanCool AI uses SHAP values to explain which features drive the model's heat predictions.
 
-```powershell
-python -m src.models.baseline_xgboost
-```
+Top global SHAP drivers observed in the current artifact set:
 
-10. Train the experimental physics-informed neural network (currently underperforms the baseline on raw fit; see Known Limitations):
+1. `BUILT_NRES_FRACTION`
+2. `NDBI`
+3. `DW_WATER_PROB`
+4. `MEAN_HEIGHT_150M`
+5. `NET_SOLAR_RADIATION_W_M2`
+6. `NDVI`
 
-```powershell
-python -m src.models.pinn
-```
+These drivers are directionally consistent with physical expectations:
 
-11. Run SHAP driver attribution on the trained baseline model:
+- built-up density and non-residential built surfaces are associated with higher heat stress
+- vegetation and water signals are associated with cooling
+- morphology and radiation features provide additional urban context
 
-```powershell
-python -m src.explainability.shap_baseline
-```
+The dashboard exposes both global SHAP rankings and ward-level explanation cards. The explanation layer is used by the scenario engine and AI recommendation layer to keep intervention recommendations grounded in model evidence.
 
-12. Export the full feature stack as a GeoTIFF via Earth Engine batch export (asynchronous — submits a task and polls until completion, then must be manually downloaded from Google Drive):
+## 8. Scenario Simulation Engine
 
-```powershell
-python -m src.feature_engineering.full_raster_prediction
-```
+The scenario engine estimates directional cooling impact for candidate interventions. It is transparent by design and does not claim physically impossible precision.
 
-   Download `feature_stack.tif` from the `UrbanCool_Exports` folder in Google Drive and place it at `outputs/feature_stack.tif`, then run pixel-wise prediction locally:
+Supported interventions:
 
-```powershell
-python -m src.feature_engineering.full_raster_prediction --skip-download
-```
+- Urban Greening
+- Cool Roofs
+- Reflective / High-Albedo Surfaces
+- Blue-Green Infrastructure
+- Water Body Restoration
 
-13. Run the ward-level aggregation (predicts across the full city grid and aggregates to ward polygons):
+Inputs:
 
-```powershell
-python -m src.feature_engineering.ward_aggregation
-```
+- ward
+- intervention type
+- intervention intensity
+- intervention coverage percentage
 
-## Current Milestone
+Outputs:
 
-The current pipeline:
+- estimated cooling impact
+- affected area
+- confidence level
+- implementation notes
+- drivers used
+- documented assumptions
 
-- initializes Google Earth Engine without repeatedly opening browser authentication
-- loads the Kolkata district boundary
-- builds a Landsat 8 Level-2 median composite
-- computes NDVI, NDBI, land surface temperature, and a simple albedo proxy
-- adds Sentinel-2 surface-reflectance indices and Dynamic World land-cover probabilities/classes
-- adds GHSL urban morphology features: building height (2018), built-up fraction (2020, nearest available epoch — GHSL has no 2018 BUILT_S product), non-residential built-up fraction, a height-density mass proxy, focal-mean building height, canyon aspect ratio (H/W), and a Sky View Factor approximation (Steyn 1980 formula, raster-density based — see Known Limitations)
-- adds ERA5-Land meteorological features: 2m air temperature, dewpoint, wind speed, precipitation, surface pressure, soil moisture, and radiation/heat-flux context
-- optionally adds ECOSTRESS LST as a higher-resolution thermal source when useful coverage exists
-- includes separate OSM acquisition for building footprints and road geometry (not yet fused into the GEE feature stack)
-- includes CPCB station CSV ingestion for externally downloaded station observations (not yet wired into the pipeline — deferred, see below)
-- exports up to 100,000+ sampled rows for model training, batched to respect GEE's getInfo limits
+The default response model uses:
 
-**Baseline model (`src/models/baseline_xgboost.py`):** XGBoost regressor predicting `LST_C`, spatial train/val/test split (10×10 lat/lon grid cells, split at the cell level to avoid pixel-adjacency leakage).
+- ward-level heat predictions
+- NDVI, NDBI, built fraction, water probability, and related features
+- SHAP feature importance support
+- conservative ward-scale cooling bounds
+- documented intervention assumptions
 
-Current performance (100K-row sample): train R²=0.891, val R²=0.775, test R²=0.745 (RMSE ≈ 0.8–1.0°C).
+The engine exposes an `InterventionResponseModel` protocol so a future PINN or calibrated physical simulator can replace or augment the current response model.
 
-Top SHAP drivers, in order of mean |SHAP value|: `BUILT_NRES_FRACTION`, `NDBI`, `DW_WATER_PROB`, `MEAN_HEIGHT_150M`, `NET_SOLAR_RADIATION_W_M2`, `NDVI`. Directionally consistent with physical expectations — water and vegetation cool, built-up density and non-residential land use heat. Water's exact importance *rank* is somewhat unstable across spatial folds due to spatial clustering of water bodies (see Known Limitations), though its cooling *direction* is unambiguous in SHAP.
+## 9. Optimization Engine
 
-**Experimental PINN (`src/models/pinn.py`):** feedforward NN with a surface-energy-balance physics residual term (Rn = H + LE + G) added to the loss. Currently underperforms the XGBoost baseline on raw fit (test R²=0.690 vs 0.745). Retained for possible use in the scenario engine, where physically-constrained extrapolation under interventions may matter more than raw fit — decision deferred until the scenario engine is built.
+The optimization engine creates a budget-constrained intervention plan.
 
-**Ward-level aggregation (`src/feature_engineering/ward_aggregation.py`):** applies the trained baseline model across a full-resolution city-wide pixel grid (sampled over the union of all ward polygons, not the GAUL district boundary — see Known Limitations history), then aggregates predictions to ward level via spatial join. Produces `outputs/ward_heat_summary.geojson` with mean predicted LST, NDVI, NDBI, built fraction, and water probability per ward. Covers 141 of Kolkata's 144 wards (see Known Limitations). Output is ready for dashboard rendering (clickable ward map).
+Inputs:
 
-**Full-resolution heat map (`src/feature_engineering/full_raster_prediction.py`):** exports the complete feature stack as a multi-band GeoTIFF via Earth Engine batch export (direct download isn't possible at this size — exceeds GEE's 50MB synchronous download cap), then runs the trained XGBoost model pixel-by-pixel locally to produce a continuous predicted-LST raster (`outputs/predicted_lst_raster.tif`) covering all of Kolkata at 30m resolution. Output range: 29.45–42.44°C, consistent with training data range. Visual inspection confirms water bodies and green pockets correctly predicted as cooler, dense built-up core as hottest — consistent with SHAP driver attribution. This is the primary "Heat Stress Map" deliverable named in the official problem statement.
+- total budget
+- intervention costs
+- target wards
+- intervention intensity and coverage
 
-## Known Limitations & Roadmap
+Outputs:
 
-This section documents deliberate scoping decisions made to hit the 15-day hackathon
-timeline. Each item below is a conscious tradeoff, not an oversight.
+- ranked intervention plan
+- ward allocation
+- estimated cooling impact
+- cost breakdown
+- candidate ranking table
+- explainable rationale for selected actions
 
-| Component | Current MVP Approach | Full / Future Approach | Why Deferred |
-|---|---|---|---|
-| Sky View Factor (SVF) & canyon aspect ratio | Raster-density proxy from GHSL building height + built-fraction rasters, using the Steyn (1980) empirical canyon formula | True geometric SVF: OSM building footprint polygons extruded by GHSL height into a 3D city model, with per-point hemispherical viewshed calculation | Footprint-level viewshed computation is a multi-day engineering task on its own; raster proxy captures the same density/height signal at a fraction of the cost |
-| GHSL epoch alignment | Built height (2018) and built surface/fraction (2020) — nearest available epochs; GHSL does not ship a 2018 BUILT_S product | True multi-temporal alignment, or multi-temporal GHSL series to track morphology change over years | GHSL release schedule constraint, not a pipeline bug |
-| Atmospheric ground-truthing | ERA5-Land reanalysis only; several ERA5 fields (air temp, wind speed, soil moisture, surface pressure, dewpoint) dropped from model features after confirming near-zero spatial variance across Kolkata at ERA5's native ~9km resolution | ERA5 cross-validated against CPCB CAAQMS ground station readings (temperature, humidity, wind) at finer spatial resolution | CPCB data requires manual, weekly-chunked export from the CCR portal (no clean API) and spatial interpolation to match raster grid — deferred as a stretch goal, not required for model to function |
-| CPCB data pipeline | Ingestion script exists (`cpcb_ingest.py`) but not wired into the feature stack | One-time historical batch pull for the training window (not a live/continuous feed — not needed for this use case) | Time better spent on baseline model + physics-informed layer first |
-| OSM building/road layers | Fetched separately (`osm_fetch.py`), not yet fused into the GEE feature stack | Fuse OSM footprint geometry into morphology features for higher-precision SVF/canyon metrics | Deferred until SHAP/dashboard work shows morphology precision is a real bottleneck, not a guess |
-| Rare land-cover classes (flooded vegetation, shrub/scrub) | Very few training examples even at 100K total samples (flooded_vegetation: 21, shrub_scrub: 114) — model predictions in these specific zones should be treated with low confidence | Targeted/stratified sampling to oversample rare classes specifically | These are genuinely rare land-cover types in Kolkata; brute-force sampling more rows doesn't meaningfully fix rarity |
-| Ward boundary completeness | Datameet community ward dataset covers 141 of KMC's 144 official wards (wards 142–144 absent from source) | Official KMC ward shapefile, if obtainable, for full 144-ward coverage | Datameet source predates the most recent ward delimitation; 141/144 (~98%) coverage is sufficient for MVP demonstration |
-| Water-driver SHAP stability | `DW_WATER_PROB`'s cooling *direction* is unambiguous and strong in SHAP, but its relative importance *rank* shifts across different spatial train/val/test splits, due to water bodies being spatially clustered (rivers/ponds) rather than evenly distributed across the city grid | N/A — inherent to spatial clustering of water features | Documented as an interpretation caveat, not a bug to fix |
-| Physics-informed NN (PINN) | Implemented with an energy-balance residual loss term; currently underperforms XGBoost baseline on raw fit (test R²=0.690 vs 0.745) | Tune `lambda_physics`, physics-head formulation, or use PINN selectively for scenario-engine extrapolation rather than the main hotspot model | Decision on whether PINN is needed deferred until scenario engine requirements are clearer |
-| Data temporality | All raster features are a single March–June 2025 median/mean composite ("representative dry-season snapshot"), not a time series — no day-to-day or seasonal change is captured | Multiple seasonal composites for comparison (dry season vs monsoon) | Not required for spatial hotspot identification and intervention placement, which is the core ask of the problem statement |
-| Raster export method | City-wide feature stack exported via asynchronous Earth Engine batch task to Google Drive, then manually downloaded | Automated download via Google Drive API, or server-side prediction inside Earth Engine (not possible — XGBoost models aren't natively executable in GEE) | Direct synchronous download (`getDownloadURL`) is capped at 50MB; the full 35-band feature stack exceeds this at city scale |
-## Repository Structure
+The current implementation uses a greedy baseline. It generates ward-intervention candidates through the scenario engine, ranks them by estimated cooling per rupee, selects at most one intervention per ward, and stops when the budget is exhausted.
+
+This is intentionally hackathon-appropriate: simple, transparent, and easy to explain. The abstraction layer allows future replacement with integer programming, multi-objective optimization, equity constraints, or implementation feasibility scoring.
+
+## 10. Dashboard Features
+
+The Streamlit dashboard is the main review surface for judges and first-time users.
+
+Pages:
+
+- **Overview:** project summary, readiness indicators, hotspot preview, and executive signal
+- **Hotspots Map:** filterable map of sampled land-surface heat intensity
+- **Ward Rankings:** ward-level prioritization, choropleth map, KPI cards, and ranking table
+- **Driver Explanations:** SHAP-backed global and ward-level explanation cards
+- **Scenario Simulation:** interactive intervention simulation by ward, type, intensity, and coverage
+- **Optimization:** budget-aware intervention allocation with cost assumptions and ranked outputs
+- **AI Recommendations:** deterministic city briefing, ward summaries, and planner-ready recommendation table
+
+See `docs/dashboard_walkthrough.md` for a page-by-page guide.
+
+## 11. Repository Structure
 
 ```text
 UrbanCool/
+├── app.py
+├── README.md
+├── requirements.txt
+├── configs/
+│   └── default.yaml
 ├── data/
 │   ├── raw/
 │   ├── processed/
 │   └── external/
+├── docs/
+│   └── dashboard_walkthrough.md
 ├── notebooks/
-├── src/
-│   ├── data_pipeline/
-│   ├── feature_engineering/
-│   ├── models/
-│   ├── explainability/
-│   ├── scenario_engine/
-│   ├── optimization/
-│   ├── dashboard/
-│   └── llm_layer/
-├── configs/
-├── tests/
 ├── outputs/
-├── app.py
-├── requirements.txt
-└── README.md
+│   ├── baseline_xgboost_model.json
+│   ├── shap_values.csv
+│   ├── shap_beeswarm.png
+│   ├── shap_global_importance.png
+│   └── ward_heat_summary.geojson
+├── src/
+│   ├── dashboard/
+│   ├── data_pipeline/
+│   ├── explainability/
+│   ├── feature_engineering/
+│   ├── llm_layer/
+│   ├── models/
+│   ├── optimization/
+│   └── scenario_engine/
+└── tests/
 ```
 
-## Next Milestones
+## 12. Installation
 
-- build the Streamlit/folium dashboard with clickable ward regions
-- build scenario simulation module (intervention effects on LST)
-- build constrained optimization module (budget-allocated intervention placement)
-- decide whether PINN is needed for scenario-engine physical consistency
+Create and activate a virtual environment.
+
+macOS/Linux:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+Windows PowerShell:
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+Authenticate Google Earth Engine once:
+
+```bash
+earthengine authenticate --auth_mode=localhost
+earthengine set_project urbancool-ai-500306
+```
+
+If using a different Earth Engine project, replace `urbancool-ai-500306` with your own project ID.
+
+## 13. Running the Pipeline
+
+Run the Earth Engine connection check:
+
+```bash
+python -m tests.test_gee_connection
+```
+
+Fetch and inspect the first feature summary:
+
+```bash
+python -m src.data_pipeline.gee_fetch
+```
+
+Export a sampled training table:
+
+```bash
+python -m src.data_pipeline.gee_fetch --export-csv data/processed/kolkata_training_sample.csv --sample-size 100000
+```
+
+Optionally include ECOSTRESS where coverage exists:
+
+```bash
+python -m src.data_pipeline.gee_fetch --include-ecostress --export-csv data/processed/kolkata_training_sample_ecostress.csv --sample-size 100000
+```
+
+Fetch OSM building and road layers:
+
+```bash
+python -m src.data_pipeline.osm_fetch
+```
+
+Optionally clean an externally downloaded CPCB CSV:
+
+```bash
+python -m src.data_pipeline.cpcb_ingest --input-csv data/external/cpcb_raw.csv
+```
+
+Train the baseline model:
+
+```bash
+python -m src.models.baseline_xgboost
+```
+
+Run SHAP attribution:
+
+```bash
+python -m src.explainability.shap_baseline
+```
+
+Train the experimental PINN:
+
+```bash
+python -m src.models.pinn
+```
+
+Export the full feature stack and run full-raster prediction:
+
+```bash
+python -m src.feature_engineering.full_raster_prediction
+```
+
+The full feature stack export is asynchronous through Earth Engine. After the task completes, download `feature_stack.tif` from the `UrbanCool_Exports` Google Drive folder, place it at `outputs/feature_stack.tif`, and run:
+
+```bash
+python -m src.feature_engineering.full_raster_prediction --skip-download
+```
+
+Generate ward-level heat summaries:
+
+```bash
+python -m src.feature_engineering.ward_aggregation
+```
+
+Expected key artifacts:
+
+- `data/processed/kolkata_training_sample.csv`
+- `outputs/baseline_xgboost_model.json`
+- `outputs/shap_values.csv`
+- `outputs/shap_beeswarm.png`
+- `outputs/shap_global_importance.png`
+- `outputs/predicted_lst_raster.tif`
+- `outputs/ward_heat_summary.geojson`
+
+## 14. Running the Dashboard
+
+Start the Streamlit dashboard:
+
+```bash
+streamlit run app.py
+```
+
+If using the local virtual environment directly:
+
+```bash
+venv/bin/streamlit run app.py
+```
+
+Then open the local URL printed by Streamlit, usually:
+
+```text
+http://localhost:8501
+```
+
+The dashboard is artifact-first. If a data artifact is missing, the relevant page will show a readiness message instead of fabricating outputs.
+
+## 15. Example Workflow
+
+1. Open the dashboard and start on **Overview**.
+2. Use **Hotspots Map** to inspect where high land-surface temperature samples cluster.
+3. Open **Ward Rankings** to identify the highest-priority wards.
+4. Use **Driver Explanations** to understand whether heat is associated with built density, vegetation loss, water absence, morphology, or radiation.
+5. Open **Scenario Simulation** and test an intervention for a selected ward.
+6. Open **Optimization**, set a budget, adjust cost assumptions, and generate a ranked intervention plan.
+7. Open **AI Recommendations** to get planner-friendly summaries for the city and selected wards.
+8. Use the recommendation table and optimization rationale as a presentation-ready action plan.
+
+## 16. Limitations
+
+UrbanCool AI is a hackathon prototype. The following limitations are documented tradeoffs:
+
+- **Ward boundary completeness:** the current community ward dataset covers 141 of Kolkata's 144 wards.
+- **Temporal scope:** features represent a March-June 2025 dry-season snapshot, not a seasonal or daily time series.
+- **Scenario calibration:** intervention impacts are directional, bounded planning estimates, not calibrated CFD or field-measured effects.
+- **PINN maturity:** the experimental PINN currently underperforms the XGBoost baseline on raw predictive fit.
+- **CPCB integration:** station ingestion exists, but CPCB observations are not yet fused into the feature stack.
+- **OSM fusion:** OSM building and road layers are fetched separately but not yet used in the core model features.
+- **SVF approximation:** sky view factor and canyon geometry use raster-density proxies rather than full 3D viewshed calculations.
+- **Water SHAP stability:** water's cooling direction is clear, but its exact global importance rank can shift because water bodies are spatially clustered.
+- **Raster export:** the full feature stack exceeds Earth Engine's synchronous download cap and currently requires asynchronous Drive export.
+
+These limitations are surfaced so reviewers can distinguish prototype scope from implementation gaps.
+
+## 17. Future Work
+
+Planned improvements:
+
+- replace or augment the default scenario response model with a calibrated PINN
+- add official KMC ward boundaries for full 144-ward coverage
+- fuse OSM building footprints and roads into higher-resolution morphology features
+- integrate CPCB station observations for atmospheric validation
+- support seasonal comparisons and trend analysis
+- add equity, feasibility, and implementation-readiness constraints to optimization
+- calibrate intervention costs with local procurement or municipal planning data
+- automate Google Drive export retrieval for full-raster prediction
+- add downloadable reports for planners and reviewers
+- package the dashboard for easier deployment
